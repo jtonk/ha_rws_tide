@@ -138,7 +138,6 @@ class RwsTideSensor(SensorEntity):
             _LOGGER.exception("Failed updating RWS tide forecast: %s", err)
 
     def _fetch_locations(self) -> list[RwsLocation]:
-        payload = {"CatalogusFilter": {"Locaties": True}}
         base_url, _, endpoint = self._metadata_url.rpartition("/")
         candidate_urls = [self._metadata_url]
         if endpoint == "OphalenCatalogus":
@@ -149,20 +148,29 @@ class RwsTideSensor(SensorEntity):
         response_payload: dict[str, Any] | None = None
         last_error: Exception | None = None
         for url in candidate_urls:
-            try:
-                response = requests.post(url, json=payload, headers=_REQUEST_HEADERS, timeout=20)
-                response.raise_for_status()
-                response_payload = response.json()
+            payload_candidates = _metadata_payload_candidates(url)
+            for payload in payload_candidates:
+                try:
+                    response = requests.post(url, json=payload, headers=_REQUEST_HEADERS, timeout=20)
+                    response.raise_for_status()
+                    response_payload = response.json()
+                    break
+                except requests.exceptions.HTTPError as err:
+                    last_error = err
+                    if err.response is not None and err.response.status_code == 403:
+                        _LOGGER.warning(
+                            "RWS metadata endpoint denied access for %s. "
+                            "This endpoint is POST-only and may block browser-style checks.",
+                            _safe_origin(url),
+                        )
+                    if err.response is not None and err.response.status_code == 400:
+                        _LOGGER.debug(
+                            "RWS metadata endpoint rejected payload for %s, trying alternate variants",
+                            _safe_origin(url),
+                        )
+                    continue
+            if response_payload is not None:
                 break
-            except requests.exceptions.HTTPError as err:
-                last_error = err
-                if err.response is not None and err.response.status_code == 403:
-                    _LOGGER.warning(
-                        "RWS metadata endpoint denied access for %s. "
-                        "This endpoint is POST-only and may block browser-style checks.",
-                        _safe_origin(url),
-                    )
-                continue
 
         if response_payload is None:
             if last_error is not None:
@@ -243,3 +251,15 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def _safe_origin(url: str) -> str:
     parsed = urlsplit(url)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _metadata_payload_candidates(url: str) -> list[dict[str, Any]]:
+    endpoint = url.rsplit("/", maxsplit=1)[-1]
+    default_variants = [
+        {"CatalogusFilter": {"Locaties": True}},
+        {"CatalogusFilter": {}},
+        {},
+    ]
+    if endpoint == "OphalenLocatieLijst":
+        return [{}, {"CatalogusFilter": {}}, {"CatalogusFilter": {"Locaties": True}}]
+    return default_variants
