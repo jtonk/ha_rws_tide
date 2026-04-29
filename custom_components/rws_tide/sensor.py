@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from math import asin, cos, radians, sin, sqrt
 import logging
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -12,21 +11,22 @@ import requests
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE, CONF_NAME
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import (
     CONF_FORECAST_URL,
+    CONF_LOCATION_KEY,
     CONF_METADATA_URL,
     CONF_PARAMETER_CODE,
     DEFAULT_FORECAST_URL,
+    DEFAULT_LOCATION_KEY,
     DEFAULT_METADATA_URL,
     DEFAULT_NAME,
     DEFAULT_PARAMETER_CODE,
     DOMAIN,
-    TIDE_SPEED_M_S,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,24 +37,14 @@ _REQUEST_HEADERS = {
     "User-Agent": "HomeAssistant-rws_tide",
 }
 
-ATTR_REQUESTED_LOCATION = "requested_location"
 ATTR_SELECTED_DATAPOINT = "selected_datapoint"
-ATTR_TIME_ADJUSTMENT_MINUTES = "time_adjustment_minutes"
 ATTR_FORECASTS = "forecasts"
-ATTR_DISTANCE_KM = "distance_km"
 
 
 def setup_platform(hass, config: ConfigType, add_entities: AddEntitiesCallback, discovery_info: DiscoveryInfoType | None = None) -> None:
     """Set up the sensor platform from YAML."""
     name = config.get(CONF_NAME, DEFAULT_NAME)
-    latitude = config.get(CONF_LATITUDE)
-    longitude = config.get(CONF_LONGITUDE)
-
-    if latitude is None or longitude is None:
-        _LOGGER.error("rws_tide requires latitude and longitude in config")
-        return
-
-    add_entities([_build_sensor(name, float(latitude), float(longitude), config)], True)
+    add_entities([_build_sensor(name, config)], True)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -64,8 +54,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         [
             _build_sensor(
                 conf.get(CONF_NAME, DEFAULT_NAME),
-                float(conf[CONF_LATITUDE]),
-                float(conf[CONF_LONGITUDE]),
                 conf,
                 entry.entry_id,
             )
@@ -74,11 +62,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     )
 
 
-def _build_sensor(name: str, latitude: float, longitude: float, conf: dict[str, Any], unique_suffix: str | None = None) -> "RwsTideSensor":
+def _build_sensor(name: str, conf: dict[str, Any], unique_suffix: str | None = None) -> "RwsTideSensor":
     sensor = RwsTideSensor(
         name=name,
-        latitude=latitude,
-        longitude=longitude,
+        requested_location_key=conf.get(CONF_LOCATION_KEY, DEFAULT_LOCATION_KEY),
         parameter_code=conf.get(CONF_PARAMETER_CODE, DEFAULT_PARAMETER_CODE),
         metadata_url=conf.get(CONF_METADATA_URL, DEFAULT_METADATA_URL),
         forecast_url=conf.get(CONF_FORECAST_URL, DEFAULT_FORECAST_URL),
@@ -92,17 +79,16 @@ def _build_sensor(name: str, latitude: float, longitude: float, conf: dict[str, 
 class RwsLocation:
     code: str
     name: str
-    latitude: float | None
-    longitude: float | None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class RwsTideSensor(SensorEntity):
     _attr_icon = "mdi:waves"
 
-    def __init__(self, *, name: str, latitude: float, longitude: float, parameter_code: str, metadata_url: str, forecast_url: str) -> None:
+    def __init__(self, *, name: str, requested_location_key: str, parameter_code: str, metadata_url: str, forecast_url: str) -> None:
         self._attr_name = name
-        self._requested_lat = latitude
-        self._requested_lon = longitude
+        self._requested_location_key = requested_location_key
         self._parameter_code = parameter_code
         self._metadata_url = metadata_url
         self._forecast_url = forecast_url
@@ -116,21 +102,17 @@ class RwsTideSensor(SensorEntity):
     def update(self) -> None:
         try:
             locations = self._fetch_locations()
-            closest = self._nearest_location(locations)
-            distance_km, shift_minutes = self._location_adjustment(closest)
-            raw_forecast = self._fetch_forecast(closest.code)
-            adjusted = self._adjust_and_filter_forecast(raw_forecast, shift_minutes)
+            selected_location = self._resolve_location(locations)
+            raw_forecast = self._fetch_forecast(selected_location.code)
+            adjusted = self._adjust_and_filter_forecast(raw_forecast)
             self._native_value = len(adjusted)
             self._attr_extra_state_attributes = {
-                ATTR_REQUESTED_LOCATION: {"latitude": self._requested_lat, "longitude": self._requested_lon},
                 ATTR_SELECTED_DATAPOINT: {
-                    "code": closest.code,
-                    "name": closest.name,
-                    "latitude": closest.latitude,
-                    "longitude": closest.longitude,
+                    "code": selected_location.code,
+                    "name": selected_location.name,
+                    "latitude": selected_location.latitude,
+                    "longitude": selected_location.longitude,
                 },
-                ATTR_DISTANCE_KM: round(distance_km, 3) if distance_km is not None else None,
-                ATTR_TIME_ADJUSTMENT_MINUTES: shift_minutes,
                 ATTR_FORECASTS: adjusted,
             }
         except Exception as err:  # pylint: disable=broad-except
@@ -216,20 +198,17 @@ class RwsTideSensor(SensorEntity):
         data = response.json()
         return data.get("VerwachtingenLijst") or data.get("WaarnemingenLijst") or data.get("MetingenLijst") or []
 
-    def _nearest_location(self, locations: list[RwsLocation]) -> RwsLocation:
-        mappable = [location for location in locations if location.latitude is not None and location.longitude is not None]
-        if not mappable:
-            return locations[0]
-        return min(mappable, key=lambda l: _haversine_km(self._requested_lat, self._requested_lon, l.latitude, l.longitude))
+    def _resolve_location(self, locations: list[RwsLocation]) -> RwsLocation:
+        by_name = {location.name.lower(): location for location in locations}
+        requested_name = self._requested_location_key.replace("_", " ").lower()
+        if requested_name in by_name:
+            return by_name[requested_name]
+        if "scheveningen" in by_name:
+            _LOGGER.warning("Configured location '%s' unavailable, falling back to Scheveningen", self._requested_location_key)
+            return by_name["scheveningen"]
+        return locations[0]
 
-    def _location_adjustment(self, location: RwsLocation) -> tuple[float | None, int]:
-        if location.latitude is None or location.longitude is None:
-            return None, 0
-        distance_km = _haversine_km(self._requested_lat, self._requested_lon, location.latitude, location.longitude)
-        shift_minutes = round((distance_km * 1000.0) / TIDE_SPEED_M_S / 60.0)
-        return distance_km, shift_minutes
-
-    def _adjust_and_filter_forecast(self, records: list[dict[str, Any]], shift_minutes: int) -> list[dict[str, Any]]:
+    def _adjust_and_filter_forecast(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
         limit = now + timedelta(hours=48)
         adjusted: list[dict[str, Any]] = []
@@ -240,10 +219,9 @@ class RwsTideSensor(SensorEntity):
             parsed_time = _parse_dt(raw_time)
             if parsed_time is None:
                 continue
-            shifted = parsed_time + timedelta(minutes=shift_minutes)
-            if now <= shifted <= limit:
+            if now <= parsed_time <= limit:
                 value = item.get("NumeriekeWaarde") or item.get("Meetwaarde") or item.get("value")
-                adjusted.append({"time": shifted.isoformat(), "original_time": parsed_time.isoformat(), "value": value})
+                adjusted.append({"time": parsed_time.isoformat(), "value": value})
         adjusted.sort(key=lambda x: x["time"])
         return adjusted
 
@@ -265,14 +243,6 @@ def _parse_dt(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
         return None
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r_km = 6371.0088
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    return 2 * r_km * asin(sqrt(a))
 
 
 def _safe_origin(url: str) -> str:
