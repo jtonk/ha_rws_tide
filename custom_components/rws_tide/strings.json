@@ -3,11 +3,10 @@
     "step": {
       "user": {
         "title": "RWS Tide Forecast",
-        "description": "Configure tide forecast using your location or a custom point.",
+        "description": "Configure tide forecast using a known RWS station.",
         "data": {
           "name": "Name",
-          "latitude": "Latitude",
-          "longitude": "Longitude",
+          "location_key": "RWS location",
           "parameter_code": "Parameter code",
           "metadata_url": "Metadata URL",
           "forecast_url": "Forecast URL"
@@ -21,8 +20,7 @@
         "title": "RWS Tide Forecast options",
         "data": {
           "name": "Name",
-          "latitude": "Latitude",
-          "longitude": "Longitude",
+          "location_key": "RWS location",
           "parameter_code": "Parameter code"
         }
       }
