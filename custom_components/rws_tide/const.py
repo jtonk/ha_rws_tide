@@ -4,7 +4,7 @@ DOMAIN = "rws_tide"
 DEFAULT_NAME = "RWS Tide Forecast"
 DEFAULT_PARAMETER_CODE = "WATHTE"
 DEFAULT_METADATA_URL = (
-    "https://waterwebservices.rijkswaterstaat.nl/METADATASERVICES_DBO/OphalenLocatieLijst"
+    "https://waterwebservices.rijkswaterstaat.nl/METADATASERVICES_DBO/OphalenCatalogus"
 )
 DEFAULT_FORECAST_URL = (
     "https://waterwebservices.rijkswaterstaat.nl/ONLINEWAARNEMINGENSERVICES_DBO/OphalenVerwachtingen"
