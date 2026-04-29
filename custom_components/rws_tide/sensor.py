@@ -92,8 +92,8 @@ def _build_sensor(name: str, latitude: float, longitude: float, conf: dict[str, 
 class RwsLocation:
     code: str
     name: str
-    latitude: float
-    longitude: float
+    latitude: float | None
+    longitude: float | None
 
 
 class RwsTideSensor(SensorEntity):
@@ -117,8 +117,7 @@ class RwsTideSensor(SensorEntity):
         try:
             locations = self._fetch_locations()
             closest = self._nearest_location(locations)
-            distance_km = _haversine_km(self._requested_lat, self._requested_lon, closest.latitude, closest.longitude)
-            shift_minutes = round((distance_km * 1000.0) / TIDE_SPEED_M_S / 60.0)
+            distance_km, shift_minutes = self._location_adjustment(closest)
             raw_forecast = self._fetch_forecast(closest.code)
             adjusted = self._adjust_and_filter_forecast(raw_forecast, shift_minutes)
             self._native_value = len(adjusted)
@@ -130,7 +129,7 @@ class RwsTideSensor(SensorEntity):
                     "latitude": closest.latitude,
                     "longitude": closest.longitude,
                 },
-                ATTR_DISTANCE_KM: round(distance_km, 3),
+                ATTR_DISTANCE_KM: round(distance_km, 3) if distance_km is not None else None,
                 ATTR_TIME_ADJUSTMENT_MINUTES: shift_minutes,
                 ATTR_FORECASTS: adjusted,
             }
@@ -188,8 +187,19 @@ class RwsTideSensor(SensorEntity):
                 continue
             name = item.get("Naam") or item.get("name") or code
             parsed.append(RwsLocation(code=code, name=name, latitude=lat, longitude=lon))
+        if parsed:
+            return parsed
+
+        fallback_locations = response_payload.get("LocatieLijst") or response_payload.get("locaties") or []
+        for item in fallback_locations:
+            code = item.get("Code") or item.get("code")
+            if not code:
+                continue
+            name = item.get("Naam") or item.get("name") or code
+            parsed.append(RwsLocation(code=code, name=name, latitude=None, longitude=None))
         if not parsed:
-            raise ValueError("No mappable RWS locations returned")
+            raise ValueError("No usable RWS locations returned")
+        _LOGGER.warning("RWS metadata returned locations without coordinates; using first matching station without distance adjustment")
         return parsed
 
     def _fetch_forecast(self, location_code: str) -> list[dict[str, Any]]:
@@ -200,7 +210,17 @@ class RwsTideSensor(SensorEntity):
         return data.get("VerwachtingenLijst") or data.get("WaarnemingenLijst") or data.get("MetingenLijst") or []
 
     def _nearest_location(self, locations: list[RwsLocation]) -> RwsLocation:
-        return min(locations, key=lambda l: _haversine_km(self._requested_lat, self._requested_lon, l.latitude, l.longitude))
+        mappable = [location for location in locations if location.latitude is not None and location.longitude is not None]
+        if not mappable:
+            return locations[0]
+        return min(mappable, key=lambda l: _haversine_km(self._requested_lat, self._requested_lon, l.latitude, l.longitude))
+
+    def _location_adjustment(self, location: RwsLocation) -> tuple[float | None, int]:
+        if location.latitude is None or location.longitude is None:
+            return None, 0
+        distance_km = _haversine_km(self._requested_lat, self._requested_lon, location.latitude, location.longitude)
+        shift_minutes = round((distance_km * 1000.0) / TIDE_SPEED_M_S / 60.0)
+        return distance_km, shift_minutes
 
     def _adjust_and_filter_forecast(self, records: list[dict[str, Any]], shift_minutes: int) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
