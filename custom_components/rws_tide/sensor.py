@@ -139,9 +139,12 @@ class RwsTideSensor(SensorEntity):
 
     def _fetch_locations(self) -> list[RwsLocation]:
         payload = {"CatalogusFilter": {"Locaties": True}}
+        base_url, _, endpoint = self._metadata_url.rpartition("/")
         candidate_urls = [self._metadata_url]
-        if self._metadata_url.endswith("/OphalenCatalogus"):
-            candidate_urls.append(self._metadata_url.rsplit("/", 1)[0] + "/OphalenLocatieLijst")
+        if endpoint == "OphalenCatalogus":
+            candidate_urls.append(f"{base_url}/OphalenLocatieLijst")
+        elif endpoint == "OphalenLocatieLijst":
+            candidate_urls.append(f"{base_url}/OphalenCatalogus")
 
         response_payload: dict[str, Any] | None = None
         last_error: Exception | None = None
