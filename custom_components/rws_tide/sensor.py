@@ -177,6 +177,11 @@ class RwsTideSensor(SensorEntity):
             raise ValueError("Unable to fetch RWS locations from metadata service")
 
         raw_locations = response_payload.get("LocatieLijst") or response_payload.get("locaties") or []
+        if not raw_locations:
+            _LOGGER.debug(
+                "RWS metadata response did not include a location list. Top-level keys: %s",
+                list(response_payload.keys()),
+            )
         parsed: list[RwsLocation] = []
         for item in raw_locations:
             lat, lon = _extract_lat_lon(item)
@@ -198,6 +203,8 @@ class RwsTideSensor(SensorEntity):
             name = item.get("Naam") or item.get("name") or code
             parsed.append(RwsLocation(code=code, name=name, latitude=None, longitude=None))
         if not parsed:
+            sample = raw_locations[0] if raw_locations else response_payload
+            _LOGGER.debug("RWS metadata sample when parsing locations failed: %s", sample)
             raise ValueError("No usable RWS locations returned")
         _LOGGER.warning("RWS metadata returned locations without coordinates; using first matching station without distance adjustment")
         return parsed

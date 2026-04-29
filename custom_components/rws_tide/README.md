@@ -41,3 +41,25 @@ Attributes:
 - `distance_km`
 - `time_adjustment_minutes`
 - `forecasts`
+
+## Troubleshooting: test RWS metadata for Katwijk aan Zee
+
+If you want to validate the upstream RWS response, run this POST from a machine that has direct internet access:
+
+```bash
+curl -sS \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -H 'User-Agent: HomeAssistant-rws_tide' \
+  -X POST 'https://waterwebservices.rijkswaterstaat.nl/METADATASERVICES_DBO/OphalenCatalogus' \
+  --data '{"CatalogusFilter":{"Locaties":true}}' > /tmp/rws_locations.json
+```
+
+Then inspect whether `LocatieLijst` exists and has entries with `Code` and coordinate fields (`Latitude`/`Longitude` or `GeoCoordinaat`).
+
+For local logic simulation (including Katwijk aan Zee), run:
+
+```bash
+python scripts_simulate_katwijk_mapping.py --offline
+python scripts_simulate_katwijk_mapping.py --live
+```
