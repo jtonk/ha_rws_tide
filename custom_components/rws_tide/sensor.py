@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from math import asin, cos, radians, sin, sqrt
 import logging
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -29,6 +30,12 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_REQUEST_HEADERS = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "User-Agent": "HomeAssistant-rws_tide",
+}
 
 ATTR_REQUESTED_LOCATION = "requested_location"
 ATTR_SELECTED_DATAPOINT = "selected_datapoint"
@@ -131,10 +138,35 @@ class RwsTideSensor(SensorEntity):
             _LOGGER.exception("Failed updating RWS tide forecast: %s", err)
 
     def _fetch_locations(self) -> list[RwsLocation]:
-        response = requests.post(self._metadata_url, json={}, timeout=20)
-        response.raise_for_status()
-        payload = response.json()
-        raw_locations = payload.get("LocatieLijst") or payload.get("locaties") or []
+        payload = {"CatalogusFilter": {"Locaties": True}}
+        candidate_urls = [self._metadata_url]
+        if self._metadata_url.endswith("/OphalenCatalogus"):
+            candidate_urls.append(self._metadata_url.rsplit("/", 1)[0] + "/OphalenLocatieLijst")
+
+        response_payload: dict[str, Any] | None = None
+        last_error: Exception | None = None
+        for url in candidate_urls:
+            try:
+                response = requests.post(url, json=payload, headers=_REQUEST_HEADERS, timeout=20)
+                response.raise_for_status()
+                response_payload = response.json()
+                break
+            except requests.exceptions.HTTPError as err:
+                last_error = err
+                if err.response is not None and err.response.status_code == 403:
+                    _LOGGER.warning(
+                        "RWS metadata endpoint denied access for %s. "
+                        "This endpoint is POST-only and may block browser-style checks.",
+                        _safe_origin(url),
+                    )
+                continue
+
+        if response_payload is None:
+            if last_error is not None:
+                raise last_error
+            raise ValueError("Unable to fetch RWS locations from metadata service")
+
+        raw_locations = response_payload.get("LocatieLijst") or response_payload.get("locaties") or []
         parsed: list[RwsLocation] = []
         for item in raw_locations:
             lat, lon = _extract_lat_lon(item)
@@ -203,3 +235,8 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlon = radians(lon2 - lon1)
     a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
     return 2 * r_km * asin(sqrt(a))
+
+
+def _safe_origin(url: str) -> str:
+    parsed = urlsplit(url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
