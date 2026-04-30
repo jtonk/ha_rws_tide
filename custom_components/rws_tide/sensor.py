@@ -1,10 +1,11 @@
 """Sensor for Rijkswaterstaat tide forecasts."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
@@ -27,9 +28,12 @@ from .api import RwsLocation, fetch_available_locations, fetch_forecasts
 
 _LOGGER = logging.getLogger(__name__)
 
+SCAN_INTERVAL = timedelta(hours=24)
+
 ATTR_REQUESTED_LOCATION = "requested_location"
 ATTR_SELECTED_DATAPOINT = "selected_datapoint"
 ATTR_FORECASTS = "forecasts"
+ATTR_FORECAST_COUNT = "forecast_count"
 
 
 def setup_platform(hass, config: ConfigType, add_entities: AddEntitiesCallback, discovery_info: DiscoveryInfoType | None = None) -> None:
@@ -68,6 +72,7 @@ def _build_sensor(name: str, conf: dict[str, Any], unique_suffix: str | None = N
 
 class RwsTideSensor(SensorEntity):
     _attr_icon = "mdi:waves"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
 
     def __init__(self, *, name: str, requested_location_key: str, parameter_code: str, metadata_url: str, forecast_url: str) -> None:
         self._attr_name = name
@@ -75,11 +80,11 @@ class RwsTideSensor(SensorEntity):
         self._parameter_code = parameter_code
         self._metadata_url = metadata_url
         self._forecast_url = forecast_url
-        self._native_value: int | None = None
+        self._native_value: datetime | None = None
         self._attr_extra_state_attributes: dict[str, Any] = {}
 
     @property
-    def native_value(self) -> int | None:
+    def native_value(self) -> datetime | None:
         return self._native_value
 
     def update(self) -> None:
@@ -94,7 +99,7 @@ class RwsTideSensor(SensorEntity):
                 selected_location.code,
                 self._parameter_code,
             )
-            self._native_value = len(forecasts)
+            self._native_value = datetime.now(timezone.utc)
             self._attr_extra_state_attributes = {
                 ATTR_REQUESTED_LOCATION: self._requested_location_key,
                 ATTR_SELECTED_DATAPOINT: {
@@ -103,6 +108,7 @@ class RwsTideSensor(SensorEntity):
                     "latitude": selected_location.latitude,
                     "longitude": selected_location.longitude,
                 },
+                ATTR_FORECAST_COUNT: len(forecasts),
                 ATTR_FORECASTS: forecasts,
             }
         except Exception as err:  # pylint: disable=broad-except

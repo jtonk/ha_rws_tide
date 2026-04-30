@@ -34,12 +34,16 @@ sensor:
 
 ## Entity behavior
 
-The sensor state is the number of forecast points available in the next 48 hours.
+The sensor state is the timestamp of the last successful fetch.
 
 Attributes:
 - `requested_location`
 - `selected_datapoint`
+- `forecast_count`
 - `forecasts`
+
+The integration refreshes on startup or reload, then every 24 hours after that.
+Each fetch requests a rolling window covering the last 24 hours and the next 48 hours.
 
 ## Troubleshooting: test the current RWS catalog
 

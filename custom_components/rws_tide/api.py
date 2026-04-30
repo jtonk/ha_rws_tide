@@ -98,11 +98,12 @@ def fetch_forecasts(
     *,
     process_type: str = DEFAULT_PROCESS_TYPE,
     compartment_code: str = DEFAULT_COMPARTMENT_CODE,
+    hours_back: int = 24,
     hours_ahead: int = 48,
 ) -> list[dict[str, Any]]:
     """Fetch and normalize forecast measurements for a single location."""
     now = datetime.now().astimezone()
-    period_start = now - timedelta(minutes=10)
+    period_start = now - timedelta(hours=hours_back)
     period_end = now + timedelta(hours=hours_ahead)
     payload = {
         "Locatie": {"Code": location_code},

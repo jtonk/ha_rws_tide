@@ -73,7 +73,7 @@ def fetch_live_forecast(location_code: str) -> list[dict]:
             }
         },
         "Periode": {
-            "Begindatumtijd": (now - timedelta(minutes=10)).isoformat(timespec="milliseconds"),
+            "Begindatumtijd": (now - timedelta(hours=24)).isoformat(timespec="milliseconds"),
             "Einddatumtijd": (now + timedelta(hours=48)).isoformat(timespec="milliseconds"),
         },
     }
