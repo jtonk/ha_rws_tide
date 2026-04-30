@@ -1,6 +1,6 @@
 # RWS Tide Forecast integration
 
-Home Assistant custom integration that fetches Rijkswaterstaat tide forecasts and shifts time based on your distance to the nearest RWS measurement point.
+Home Assistant custom integration that fetches Rijkswaterstaat water level forecasts from the current RWS WaterWebservices API.
 
 ## HACS installation
 
@@ -14,20 +14,21 @@ Home Assistant custom integration that fetches Rijkswaterstaat tide forecasts an
 2. Search for **RWS Tide Forecast**.
 3. Fill in:
    - Name
-   - Latitude / Longitude (defaults to Home Assistant location)
+   - RWS location
    - Parameter code (default: `WATHTE`)
 4. Save.
 
-You can edit name/location/parameter later via **Configure**.
+The location list is loaded live from the RWS catalog and only shows stations that currently expose `WATHTE` forecasts.
+
+You can edit name, location, and parameter later via **Configure**.
 
 ## YAML setup (legacy)
 
 ```yaml
 sensor:
   - platform: rws_tide
-    name: "RWS Tide (Rotterdam)"
-    latitude: 51.9244
-    longitude: 4.4777
+    name: "RWS Tide (Scheveningen)"
+    location_key: scheveningen
     parameter_code: WATHTE
 ```
 
@@ -38,11 +39,9 @@ The sensor state is the number of forecast points available in the next 48 hours
 Attributes:
 - `requested_location`
 - `selected_datapoint`
-- `distance_km`
-- `time_adjustment_minutes`
 - `forecasts`
 
-## Troubleshooting: test RWS metadata for Katwijk aan Zee
+## Troubleshooting: test the current RWS catalog
 
 If you want to validate the upstream RWS response, run this POST from a machine that has direct internet access:
 
@@ -51,13 +50,24 @@ curl -sS \
   -H 'Accept: application/json' \
   -H 'Content-Type: application/json' \
   -H 'User-Agent: HomeAssistant-rws_tide' \
-  -X POST 'https://waterwebservices.rijkswaterstaat.nl/METADATASERVICES_DBO/OphalenCatalogus' \
-  --data '{"CatalogusFilter":{"Locaties":true}}' > /tmp/rws_locations.json
+  -H 'X-API-KEY: HomeAssistant-rws_tide' \
+  -X POST 'https://ddapi20-waterwebservices.rijkswaterstaat.nl/METADATASERVICES/OphalenCatalogus' \
+  --data '{"CatalogusFilter":{"Compartimenten":true,"Grootheden":true,"ProcesTypes":true}}' > /tmp/rws_catalog.json
 ```
 
-Then inspect whether `LocatieLijst` exists and has entries with `Code` and coordinate fields (`Latitude`/`Longitude` or `GeoCoordinaat`).
+For a forecast fetch, use:
 
-For local logic simulation (including Katwijk aan Zee), run:
+```bash
+curl -sS \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -H 'User-Agent: HomeAssistant-rws_tide' \
+  -H 'X-API-KEY: HomeAssistant-rws_tide' \
+  -X POST 'https://ddapi20-waterwebservices.rijkswaterstaat.nl/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen' \
+  --data '{"Locatie":{"Code":"scheveningen"},"AquoPlusWaarnemingMetadata":{"AquoMetadata":{"Compartiment":{"Code":"OW"},"Grootheid":{"Code":"WATHTE"},"ProcesType":"verwachting"}},"Periode":{"Begindatumtijd":"2026-04-30T00:00:00.000+02:00","Einddatumtijd":"2026-05-02T23:59:59.000+02:00"}}'
+```
+
+For a local smoke test that selects the closest forecast-capable station for Katwijk aan Zee, run:
 
 ```bash
 python scripts_simulate_katwijk_mapping.py --offline

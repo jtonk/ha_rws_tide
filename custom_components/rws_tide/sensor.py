@@ -1,13 +1,8 @@
 """Sensor for Rijkswaterstaat tide forecasts."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
-
-import requests
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -28,15 +23,11 @@ from .const import (
     DEFAULT_PARAMETER_CODE,
     DOMAIN,
 )
+from .api import RwsLocation, fetch_available_locations, fetch_forecasts
 
 _LOGGER = logging.getLogger(__name__)
 
-_REQUEST_HEADERS = {
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-    "User-Agent": "HomeAssistant-rws_tide",
-}
-
+ATTR_REQUESTED_LOCATION = "requested_location"
 ATTR_SELECTED_DATAPOINT = "selected_datapoint"
 ATTR_FORECASTS = "forecasts"
 
@@ -75,14 +66,6 @@ def _build_sensor(name: str, conf: dict[str, Any], unique_suffix: str | None = N
     return sensor
 
 
-@dataclass
-class RwsLocation:
-    code: str
-    name: str
-    latitude: float | None = None
-    longitude: float | None = None
-
-
 class RwsTideSensor(SensorEntity):
     _attr_icon = "mdi:waves"
 
@@ -101,162 +84,48 @@ class RwsTideSensor(SensorEntity):
 
     def update(self) -> None:
         try:
-            locations = self._fetch_locations()
+            locations = fetch_available_locations(
+                self._metadata_url,
+                self._parameter_code,
+            )
             selected_location = self._resolve_location(locations)
-            raw_forecast = self._fetch_forecast(selected_location.code)
-            adjusted = self._adjust_and_filter_forecast(raw_forecast)
-            self._native_value = len(adjusted)
+            forecasts = fetch_forecasts(
+                self._forecast_url,
+                selected_location.code,
+                self._parameter_code,
+            )
+            self._native_value = len(forecasts)
             self._attr_extra_state_attributes = {
+                ATTR_REQUESTED_LOCATION: self._requested_location_key,
                 ATTR_SELECTED_DATAPOINT: {
                     "code": selected_location.code,
                     "name": selected_location.name,
                     "latitude": selected_location.latitude,
                     "longitude": selected_location.longitude,
                 },
-                ATTR_FORECASTS: adjusted,
+                ATTR_FORECASTS: forecasts,
             }
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.exception("Failed updating RWS tide forecast: %s", err)
 
-    def _fetch_locations(self) -> list[RwsLocation]:
-        base_url, _, endpoint = self._metadata_url.rpartition("/")
-        candidate_urls = [self._metadata_url]
-        if endpoint == "OphalenCatalogus":
-            candidate_urls.append(f"{base_url}/OphalenLocatieLijst")
-        elif endpoint == "OphalenLocatieLijst":
-            candidate_urls.append(f"{base_url}/OphalenCatalogus")
-
-        response_payload: dict[str, Any] | None = None
-        last_error: Exception | None = None
-        for url in candidate_urls:
-            payload_candidates = _metadata_payload_candidates(url)
-            for payload in payload_candidates:
-                try:
-                    response = requests.post(url, json=payload, headers=_REQUEST_HEADERS, timeout=20)
-                    response.raise_for_status()
-                    response_payload = response.json()
-                    break
-                except requests.exceptions.HTTPError as err:
-                    last_error = err
-                    if err.response is not None and err.response.status_code == 403:
-                        _LOGGER.warning(
-                            "RWS metadata endpoint denied access for %s. "
-                            "This endpoint is POST-only and may block browser-style checks.",
-                            _safe_origin(url),
-                        )
-                    if err.response is not None and err.response.status_code == 400:
-                        _LOGGER.debug(
-                            "RWS metadata endpoint rejected payload for %s, trying alternate variants",
-                            _safe_origin(url),
-                        )
-                    continue
-            if response_payload is not None:
-                break
-
-        if response_payload is None:
-            if last_error is not None:
-                raise last_error
-            raise ValueError("Unable to fetch RWS locations from metadata service")
-
-        raw_locations = response_payload.get("LocatieLijst") or response_payload.get("locaties") or []
-        if not raw_locations:
-            _LOGGER.debug(
-                "RWS metadata response did not include a location list. Top-level keys: %s",
-                list(response_payload.keys()),
-            )
-        parsed: list[RwsLocation] = []
-        for item in raw_locations:
-            lat, lon = _extract_lat_lon(item)
-            if lat is None or lon is None:
-                continue
-            code = item.get("Code") or item.get("code")
-            if not code:
-                continue
-            name = item.get("Naam") or item.get("name") or code
-            parsed.append(RwsLocation(code=code, name=name, latitude=lat, longitude=lon))
-        if parsed:
-            return parsed
-
-        fallback_locations = response_payload.get("LocatieLijst") or response_payload.get("locaties") or []
-        for item in fallback_locations:
-            code = item.get("Code") or item.get("code")
-            if not code:
-                continue
-            name = item.get("Naam") or item.get("name") or code
-            parsed.append(RwsLocation(code=code, name=name, latitude=None, longitude=None))
-        if not parsed:
-            sample = raw_locations[0] if raw_locations else response_payload
-            _LOGGER.debug("RWS metadata sample when parsing locations failed: %s", sample)
-            raise ValueError("No usable RWS locations returned")
-        _LOGGER.warning("RWS metadata returned locations without coordinates; using first matching station without distance adjustment")
-        return parsed
-
-    def _fetch_forecast(self, location_code: str) -> list[dict[str, Any]]:
-        payload = {"Locatie": {"Code": location_code}, "AquoPlusWaarnemingMetadata": {"AquoMetadata": {"Grootheid": {"Code": self._parameter_code}}}}
-        response = requests.post(self._forecast_url, json=payload, timeout=20)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("VerwachtingenLijst") or data.get("WaarnemingenLijst") or data.get("MetingenLijst") or []
-
     def _resolve_location(self, locations: list[RwsLocation]) -> RwsLocation:
+        requested_key = self._requested_location_key.replace("_", " ").lower()
+        by_code = {location.code.lower(): location for location in locations}
         by_name = {location.name.lower(): location for location in locations}
-        requested_name = self._requested_location_key.replace("_", " ").lower()
-        if requested_name in by_name:
-            return by_name[requested_name]
+        if requested_key in by_code:
+            return by_code[requested_key]
+        if requested_key in by_name:
+            return by_name[requested_key]
+        if "scheveningen" in by_code:
+            _LOGGER.warning(
+                "Configured location '%s' unavailable, falling back to Scheveningen",
+                self._requested_location_key,
+            )
+            return by_code["scheveningen"]
         if "scheveningen" in by_name:
-            _LOGGER.warning("Configured location '%s' unavailable, falling back to Scheveningen", self._requested_location_key)
+            _LOGGER.warning(
+                "Configured location '%s' unavailable, falling back to Scheveningen",
+                self._requested_location_key,
+            )
             return by_name["scheveningen"]
         return locations[0]
-
-    def _adjust_and_filter_forecast(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        now = datetime.now(timezone.utc)
-        limit = now + timedelta(hours=48)
-        adjusted: list[dict[str, Any]] = []
-        for item in records:
-            raw_time = item.get("Tijdstip") or item.get("tijdstip") or item.get("DateTime") or item.get("datetime")
-            if not raw_time:
-                continue
-            parsed_time = _parse_dt(raw_time)
-            if parsed_time is None:
-                continue
-            if now <= parsed_time <= limit:
-                value = item.get("NumeriekeWaarde") or item.get("Meetwaarde") or item.get("value")
-                adjusted.append({"time": parsed_time.isoformat(), "value": value})
-        adjusted.sort(key=lambda x: x["time"])
-        return adjusted
-
-
-def _extract_lat_lon(item: dict[str, Any]) -> tuple[float | None, float | None]:
-    for lat_key, lon_key in (("Latitude", "Longitude"), ("latitude", "longitude"), ("Lat", "Lon")):
-        if lat_key in item and lon_key in item:
-            return float(item[lat_key]), float(item[lon_key])
-    geo = item.get("GeoCoordinaat") or item.get("geo") or {}
-    lat = geo.get("Latitude") or geo.get("latitude")
-    lon = geo.get("Longitude") or geo.get("longitude")
-    if lat is not None and lon is not None:
-        return float(lat), float(lon)
-    return None, None
-
-
-def _parse_dt(value: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return None
-
-
-def _safe_origin(url: str) -> str:
-    parsed = urlsplit(url)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-
-
-def _metadata_payload_candidates(url: str) -> list[dict[str, Any]]:
-    endpoint = url.rsplit("/", maxsplit=1)[-1]
-    default_variants = [
-        {"CatalogusFilter": {"Locaties": True}},
-        {"CatalogusFilter": {}},
-        {},
-    ]
-    if endpoint == "OphalenLocatieLijst":
-        return [{}, {"CatalogusFilter": {}}, {"CatalogusFilter": {"Locaties": True}}]
-    return default_variants

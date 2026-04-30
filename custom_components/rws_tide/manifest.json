@@ -1,7 +1,7 @@
 {
   "domain": "rws_tide",
   "name": "Rijkswaterstaat Tide Forecast",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "documentation": "https://www.rijkswaterstaat.nl/",
   "requirements": [],
   "codeowners": [],

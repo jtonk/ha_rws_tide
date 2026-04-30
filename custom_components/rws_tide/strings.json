@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "RWS Tide Forecast",
-        "description": "Configure tide forecast using a known RWS station.",
+        "description": "Configure tide forecast using the current online RWS forecast locations.",
         "data": {
           "name": "Name",
           "location_key": "RWS location",
@@ -25,5 +25,9 @@
         }
       }
     }
+  },
+  "error": {
+    "cannot_connect": "Could not load the current RWS location list.",
+    "invalid_location": "Select a location from the current RWS catalog."
   }
 }
