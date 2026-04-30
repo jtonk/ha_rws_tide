@@ -70,10 +70,3 @@ curl -sS \
   -X POST 'https://ddapi20-waterwebservices.rijkswaterstaat.nl/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen' \
   --data '{"Locatie":{"Code":"scheveningen"},"AquoPlusWaarnemingMetadata":{"AquoMetadata":{"Compartiment":{"Code":"OW"},"Grootheid":{"Code":"WATHTE"},"ProcesType":"verwachting"}},"Periode":{"Begindatumtijd":"2026-04-30T00:00:00.000+02:00","Einddatumtijd":"2026-05-02T23:59:59.000+02:00"}}'
 ```
-
-For a local smoke test that selects the closest forecast-capable station for Katwijk aan Zee, run:
-
-```bash
-python scripts_simulate_katwijk_mapping.py --offline
-python scripts_simulate_katwijk_mapping.py --live
-```
