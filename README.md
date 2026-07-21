@@ -55,7 +55,7 @@ sensor:
 
 This integration creates a single sensor.
 
-- The sensor state is the timestamp of the last successful refresh.
+- The sensor state is the forecasted water level, in centimeters, at the forecast point nearest to the last successful refresh.
 - Forecast values are stored in the sensor attributes.
 - The integration refreshes every 24 hours.
 - Each refresh requests a rolling window from 24 hours back to 48 hours ahead.
@@ -65,9 +65,14 @@ This integration creates a single sensor.
 - `requested_location`
 - `selected_datapoint`
 - `forecast_count`
+- `current_forecast_time`
+- `last_successful_fetch`
 - `forecasts`
 
 `selected_datapoint` includes the resolved RWS station code, name, latitude, and longitude.
+
+`current_forecast_time` is the timestamp of the forecast point used as the sensor state.
+`last_successful_fetch` is the timestamp of the successful RWS fetch.
 
 `forecasts` is a list of forecast records in this shape:
 

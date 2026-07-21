@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME
+from homeassistant.const import CONF_NAME, UnitOfLength
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -34,6 +34,8 @@ ATTR_REQUESTED_LOCATION = "requested_location"
 ATTR_SELECTED_DATAPOINT = "selected_datapoint"
 ATTR_FORECASTS = "forecasts"
 ATTR_FORECAST_COUNT = "forecast_count"
+ATTR_CURRENT_FORECAST_TIME = "current_forecast_time"
+ATTR_LAST_SUCCESSFUL_FETCH = "last_successful_fetch"
 
 
 def setup_platform(hass, config: ConfigType, add_entities: AddEntitiesCallback, discovery_info: DiscoveryInfoType | None = None) -> None:
@@ -72,7 +74,9 @@ def _build_sensor(name: str, conf: dict[str, Any], unique_suffix: str | None = N
 
 class RwsTideSensor(SensorEntity):
     _attr_icon = "mdi:waves"
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_native_unit_of_measurement = UnitOfLength.CENTIMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, *, name: str, requested_location_key: str, parameter_code: str, metadata_url: str, forecast_url: str) -> None:
         self._attr_name = name
@@ -80,11 +84,11 @@ class RwsTideSensor(SensorEntity):
         self._parameter_code = parameter_code
         self._metadata_url = metadata_url
         self._forecast_url = forecast_url
-        self._native_value: datetime | None = None
+        self._native_value: int | float | None = None
         self._attr_extra_state_attributes: dict[str, Any] = {}
 
     @property
-    def native_value(self) -> datetime | None:
+    def native_value(self) -> int | float | None:
         return self._native_value
 
     def update(self) -> None:
@@ -99,7 +103,9 @@ class RwsTideSensor(SensorEntity):
                 selected_location.code,
                 self._parameter_code,
             )
-            self._native_value = datetime.now(timezone.utc)
+            last_fetch = datetime.now(timezone.utc)
+            current_forecast = _nearest_forecast(forecasts, last_fetch)
+            self._native_value = current_forecast["value"] if current_forecast else None
             self._attr_extra_state_attributes = {
                 ATTR_REQUESTED_LOCATION: self._requested_location_key,
                 ATTR_SELECTED_DATAPOINT: {
@@ -109,6 +115,8 @@ class RwsTideSensor(SensorEntity):
                     "longitude": selected_location.longitude,
                 },
                 ATTR_FORECAST_COUNT: len(forecasts),
+                ATTR_CURRENT_FORECAST_TIME: current_forecast["time"] if current_forecast else None,
+                ATTR_LAST_SUCCESSFUL_FETCH: last_fetch.isoformat(),
                 ATTR_FORECASTS: forecasts,
             }
         except Exception as err:  # pylint: disable=broad-except
@@ -135,3 +143,45 @@ class RwsTideSensor(SensorEntity):
             )
             return by_name["scheveningen"]
         return locations[0]
+
+
+def _nearest_forecast(forecasts: list[dict[str, Any]], target: datetime) -> dict[str, Any] | None:
+    """Return the forecast point nearest to the target timestamp."""
+    target_utc = target.astimezone(timezone.utc)
+    nearest: tuple[float, dict[str, Any]] | None = None
+
+    for item in forecasts:
+        forecast_time = _parse_forecast_time(item.get("time"))
+        value = _coerce_number(item.get("value"))
+        if forecast_time is None or value is None:
+            continue
+
+        distance = abs((forecast_time - target_utc).total_seconds())
+        normalized = {"time": forecast_time.isoformat(), "value": value}
+        if nearest is None or distance < nearest[0]:
+            nearest = (distance, normalized)
+
+    return nearest[1] if nearest else None
+
+
+def _parse_forecast_time(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _coerce_number(value: Any) -> int | float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            return None
+        return int(parsed) if parsed.is_integer() else parsed
+    return None

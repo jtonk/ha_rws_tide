@@ -34,12 +34,14 @@ sensor:
 
 ## Entity behavior
 
-The sensor state is the timestamp of the last successful fetch.
+The sensor state is the forecasted water level, in centimeters, at the forecast point nearest to the last successful fetch.
 
 Attributes:
 - `requested_location`
 - `selected_datapoint`
 - `forecast_count`
+- `current_forecast_time`
+- `last_successful_fetch`
 - `forecasts`
 
 The integration refreshes on startup or reload, then every 24 hours after that.
