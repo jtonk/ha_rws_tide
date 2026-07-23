@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfLength
 from homeassistant.core import HomeAssistant
@@ -76,7 +76,6 @@ class RwsTideSensor(SensorEntity):
     _attr_icon = "mdi:waves"
     _attr_device_class = SensorDeviceClass.DISTANCE
     _attr_native_unit_of_measurement = UnitOfLength.CENTIMETERS
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, *, name: str, requested_location_key: str, parameter_code: str, metadata_url: str, forecast_url: str) -> None:
         self._attr_name = name
